@@ -1,0 +1,11 @@
+[package]
+name = "pipewire-rs-testing"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+hound = "3.5.0"
+pipewire = {git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs.git", rev = "2d0b2ee5e5a77d96e0d789b692126ca520c69719"}
+libspa-sys = {git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs.git", rev = "2d0b2ee5e5a77d96e0d789b692126ca520c69719"}
