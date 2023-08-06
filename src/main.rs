@@ -1,11 +1,13 @@
 use std::f32::consts::PI;
 
-use pipewire as pw;
 use libspa_sys::*;
+use pipewire as pw;
 
-struct UserData {
-    format: pw::spa::param::video::VideoInfoRaw,
-}
+pub const DEFAULT_RATE: u32 = 44100;
+pub const DEFAULT_CHANNELS: u32 = 2;
+pub const DEFAULT_VOLUME: f64 = 0.7;
+pub const PI_2: f64 = std::f64::consts::PI + std::f64::consts::PI;
+pub const CHAN_SIZE: usize = std::mem::size_of::<i16>();
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub struct AudioFormat(pub u32);
@@ -15,7 +17,6 @@ impl AudioFormat {
     pub const Unknown: Self = Self(libspa_sys::SPA_AUDIO_FORMAT_UNKNOWN);
     pub const S16LE: Self = Self(libspa_sys::SPA_AUDIO_FORMAT_S16_LE);
     pub const S16BE: Self = Self(libspa_sys::SPA_AUDIO_FORMAT_S16_BE);
-
 
     /// Obtain a [`VideoFormat`] from a raw `spa_video_format` variant.
     pub fn from_raw(raw: u32) -> Self {
@@ -28,34 +29,21 @@ impl AudioFormat {
     }
 }
 
-// #[macro_export]
-// macro_rules! __property__ {
-//     ($key:expr, Choice, Enum, Id, $default:expr, $($alternative:expr),+ $(,)?) => {
-//         pipewire::spa::pod::property!(
-//             $key,
-//             pipewire::spa::pod::Value::Choice(pipewire::spa::pod::ChoiceValue::Id(
-//                 pipewire::spa::utils::Choice::<pipewire::spa::utils::Id>(
-//                     pipewire::spa::utils::ChoiceFlags::empty(),
-//                     pipewire::spa::utils::ChoiceEnum::<pipewire::spa::utils::Id>::Enum {
-//                         default: pipewire::spa::utils::Id($default.as_raw()),
-//                         alternatives: [ $( pipewire::spa::utils::Id($alternative.as_raw()), )+ ].to_vec()
-//                     }
-//                 )
-//             ))
-//         )
-//     };
-// }
+fn main() -> Result<(), pw::Error> {
+    // create_wav();
 
-fn main() {
-    create_wav();
+    let mainloop = new_pipewire_microphone();
 
-    let mut reader = hound::WavReader::open("sine.wav").unwrap();
-    reader.samples::<i16>().for_each(|sample| match sample {
-        Ok(s) => {
-            print!("{}", s)
-        }
-        Err(e) => println!("{}", e),
-    })
+    unsafe { pw::deinit() };
+
+    // let mut reader = hound::WavReader::open("sine.wav").unwrap();
+    // reader.samples::<i16>().for_each(|sample| match sample {
+    //     Ok(s) => {
+    //         print!("{}", s)
+    //     }
+    //     Err(e) => println!("{}", e),
+    // })
+    Ok(())
 }
 
 pub fn create_wav() {
@@ -73,7 +61,7 @@ pub fn create_wav() {
     }
 }
 
-pub fn new_pipewire_microphone() -> Result<(), pw::Error> {
+pub fn new_pipewire_microphone() -> Result<pw::MainLoop, pw::Error> {
     let mainloop = pw::MainLoop::new()?;
     let context = pw::Context::new(&mainloop)?;
     let core = context.connect(None)?;
@@ -83,82 +71,50 @@ pub fn new_pipewire_microphone() -> Result<(), pw::Error> {
         "alvr-mic",
         pw::properties! {
             *pw::keys::MEDIA_TYPE => "Audio",
-            *pw::keys::MEDIA_CATEGORY => "Capture",
-            *pw::keys::MEDIA_ROLE => "Music",
-        }
+            *pw::keys::MEDIA_CATEGORY => "Playback",
+            *pw::keys::MEDIA_CLASS => "Audio/Source",
+            *pw::keys::MEDIA_ROLE => "Communication",
+        },
     )?;
 
-    let data = UserData {
-        format: Default::default(),
-    };
-
-    let _listener = stream
-        .add_local_listener_with_user_data(data)
+    let _listener: pw::stream::StreamListener<f64> = stream
+        .add_local_listener_with_user_data(0.0)
         .state_changed(|old, new| {
             println!("State changed: {:?} -> {:?}", old, new);
         })
-        .param_changed(|_, id, user_data, param| {
-            if param.is_null() || id != pw::spa::param::ParamType::Format.as_raw() {
-                return;
-            }
-
-            let (media_type, media_subtype) = unsafe {
-                match pw::spa::param::format_utils::spa_parse_format(param) {
-                    Ok(v) => v,
-                    Err(_) => return,
-                }
-            };
-
-            if media_type != pw::spa::format::MediaType::Video
-                || media_subtype != pw::spa::format::MediaSubtype::Raw
-            {
-                return;
-            }
-
-            unsafe {
-                user_data
-                    .format
-                    .parse(param)
-                    .expect("Failed to parse param changed to VideoInfoRaw")
-            };
-
-            println!("got video format:");
-            println!(
-                "  format: {} ({:?})",
-                user_data.format.format().as_raw(),
-                user_data.format.format()
-            );
-            println!(
-                "  size: {}x{}",
-                user_data.format.size().width,
-                user_data.format.size().height
-            );
-            println!(
-                "  framerate: {}/{}",
-                user_data.format.framerate().num,
-                user_data.format.framerate().denom
-            );
-
-            // prepare to render video of this size
-        })
-        .process(|stream, _| {
-            match stream.dequeue_buffer() {
-                None => println!("out of buffers"),
-                Some(mut buffer) => {
-                    let datas = buffer.datas_mut();
-                    if datas.is_empty() {
-                        return;
+        .param_changed(|_, id, user_data, param| {})
+        .process(|stream, acc| match stream.dequeue_buffer() {
+            None => println!("out of buffers"),
+            Some(mut buffer) => {
+                let datas = buffer.datas_mut();
+                let stride = CHAN_SIZE * DEFAULT_CHANNELS as usize;
+                let data = &mut datas[0];
+                let n_frames = if let Some(slice) = data.data() {
+                    let n_frames = slice.len() / stride;
+                    for i in 0..n_frames {
+                        *acc += PI_2 * 440.0 / DEFAULT_RATE as f64;
+                        if *acc >= PI_2 {
+                            *acc -= PI_2
+                        }
+                        let val = (f64::sin(*acc) * DEFAULT_VOLUME * 16767.0) as i16;
+                        for c in 0..DEFAULT_CHANNELS {
+                            let start = i * stride + (c as usize * CHAN_SIZE);
+                            let end = start + CHAN_SIZE;
+                            let chan = &mut slice[start..end];
+                            chan.copy_from_slice(&i16::to_le_bytes(val));
+                        }
                     }
-
-                    // copy frame data to screen
-                    let data = &mut datas[0];
-                    println!("got a frame of size {}", data.chunk().size());
-                }
+                    n_frames
+                } else {
+                    0
+                };
+                let chunk = data.chunk_mut();
+                *chunk.offset_mut() = 0;
+                *chunk.stride_mut() = stride as _;
+                *chunk.size_mut() = (stride * n_frames) as _;
             }
         })
         .register()?;
-
-        pw::spa::param::video::VideoFormat;
 
     let obj = pw::spa::pod::object!(
         pw::spa::utils::SpaTypes::ObjectParamFormat,
@@ -174,21 +130,6 @@ pub fn new_pipewire_microphone() -> Result<(), pw::Error> {
             pw::spa::format::MediaSubtype::Raw
         ),
         pw::spa::pod::property!(
-            pw::spa::format::FormatProperties::AudioRate,
-            Choice,
-            Range,
-            Fraction,
-            pw::spa::utils::Fraction {
-                num: 48000, denom: 1
-            },
-            pw::spa::utils::Fraction {
-                num: 8000, denom: 1
-            },
-            pw::spa::utils::Fraction {
-                num: 192000, denom: 1
-            }
-        ),
-        pw::spa::pod::property!(
             pw::spa::format::FormatProperties::AudioFormat,
             Choice,
             Enum,
@@ -196,14 +137,9 @@ pub fn new_pipewire_microphone() -> Result<(), pw::Error> {
             AudioFormat::S16LE,
             AudioFormat::S16BE
         ),
-        pw::spa::pod::property!(
-            pw::spa::format::FormatProperties::AudioChannels,
-            Choice,
-            pw::spa::utils::ChoiceEnum::<Int>::None(pw::pod:: ::Value::Int(1))
-            
-        ),
+        pw::spa::pod::property!(pw::spa::format::FormatProperties::AudioRate, Int, 44100),
+        pw::spa::pod::property!(pw::spa::format::FormatProperties::AudioChannels, Int, 1),
     );
-
 
     let values = pw::spa::pod::serialize::PodSerializer::serialize(
         std::io::Cursor::new(Vec::new()),
@@ -213,17 +149,17 @@ pub fn new_pipewire_microphone() -> Result<(), pw::Error> {
     .0
     .into_inner();
 
-    // let mut params = [values.as_ptr() as *const spa_sys::spa_pod];
+    let mut params = [values.as_ptr() as *const libspa_sys::spa_pod];
 
-    // stream.connect(
-    //     spa::Direction::Input,
-    //     opt.target,
-    //     pw::stream::StreamFlags::AUTOCONNECT | pw::stream::StreamFlags::MAP_BUFFERS,
-    //     &mut params,
-    // )?;
+    stream.connect(
+        pw::spa::Direction::Output,
+        None,
+        pw::stream::StreamFlags::AUTOCONNECT
+            | pw::stream::StreamFlags::MAP_BUFFERS
+            | pw::stream::StreamFlags::RT_PROCESS,
+        &mut params,
+    )?;
+    mainloop.run();
 
-
-    Ok(())
+    Ok(mainloop)
 }
-
-fn process(sample: i16) {}
